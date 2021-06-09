@@ -248,6 +248,11 @@ conf["extras_require"] = {
 }
 conf["packages"] = find_packages("src")
 conf["package_dir"] = {"": "src"}
+conf["package_data"] = {
+    "toast": [
+        "aux/weather/*",
+    ]
+}
 conf["ext_modules"] = ext_modules
 conf["scripts"] = scripts
 conf["entry_points"] = {

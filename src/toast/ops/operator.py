@@ -2,11 +2,15 @@
 # All rights reserved.  Use of this source code is governed by
 # a BSD-style license that can be found in the LICENSE file.
 
+from pkg_resources import resource_filename
 
 from toast.timing import function_timer_stackskip
+
 from ..utils import Logger
 
 from ..traits import TraitConfig
+
+from ..cuda import use_pycuda
 
 
 class Operator(TraitConfig):
@@ -16,6 +20,8 @@ class Operator(TraitConfig):
     defines some interfaces and also some common helper methods.
 
     """
+
+    cuda_module = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -39,6 +45,7 @@ class Operator(TraitConfig):
             None
 
         """
+        # On first execution, if cuda is supported and module file exists, load.
         self._exec(data, detectors=detectors, **kwargs)
 
     def _finalize(self, data, **kwargs):
