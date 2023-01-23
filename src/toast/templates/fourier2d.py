@@ -391,6 +391,8 @@ class Fourier2D(Template):
         for iob, ob in enumerate(self.data.obs):
             if detector not in self._obs_dets[iob]:
                 continue
+            if detector not in ob.detdata[self.det_data].detectors:
+                continue
             views = ob.view[self.view]
             for ivw, vw in enumerate(views):
                 amp_slice = slice(
@@ -411,6 +413,8 @@ class Fourier2D(Template):
             return
         for iob, ob in enumerate(self.data.obs):
             if detector not in self._obs_dets[iob]:
+                continue
+            if detector not in ob.detdata[self.det_data].detectors:
                 continue
             views = ob.view[self.view]
             for ivw, vw in enumerate(views):

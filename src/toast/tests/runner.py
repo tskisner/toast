@@ -60,6 +60,7 @@ from . import ops_pixels_healpix as test_ops_pixels_healpix
 from . import ops_pointing_detector as test_ops_pointing_detector
 from . import ops_pointing_healpix as test_ops_pointing_healpix
 from . import ops_pointing_wcs as test_ops_pointing_wcs
+from . import ops_pointing_model as test_ops_pointing_model
 from . import ops_polyfilter as test_ops_polyfilter
 from . import ops_scan_alm as test_ops_scan_alm
 from . import ops_scan_healpix as test_ops_scan_healpix
@@ -95,6 +96,7 @@ from . import template_fourier2d as test_template_fourier2d
 from . import template_gain as test_template_gain
 from . import template_offset as test_template_offset
 from . import template_periodic as test_template_periodic
+from . import template_offset2d as test_template_offset2d
 from . import template_subharmonic as test_template_subharmonic
 from . import timing as test_timing
 from . import weather as test_weather
@@ -201,6 +203,7 @@ def test(name=None, verbosity=2):
         suite.addTest(loader.loadTestsFromModule(test_ops_pointing_detector))
         suite.addTest(loader.loadTestsFromModule(test_ops_pointing_healpix))
         suite.addTest(loader.loadTestsFromModule(test_ops_pointing_wcs))
+        suite.addTest(loader.loadTestsFromModule(test_ops_pointing_model))
         suite.addTest(loader.loadTestsFromModule(test_ops_sim_tod_noise))
         suite.addTest(loader.loadTestsFromModule(test_ops_sim_tod_dipole))
         suite.addTest(loader.loadTestsFromModule(test_ops_sim_tod_atm))
@@ -259,6 +262,7 @@ def test(name=None, verbosity=2):
         suite.addTest(loader.loadTestsFromModule(test_template_amplitudes))
         suite.addTest(loader.loadTestsFromModule(test_template_periodic))
         suite.addTest(loader.loadTestsFromModule(test_template_offset))
+        suite.addTest(loader.loadTestsFromModule(test_template_offset2d))
         suite.addTest(loader.loadTestsFromModule(test_template_fourier2d))
         suite.addTest(loader.loadTestsFromModule(test_template_subharmonic))
         suite.addTest(loader.loadTestsFromModule(test_template_gain))

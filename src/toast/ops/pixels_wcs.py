@@ -601,6 +601,8 @@ class PixelsWCS(Operator):
                         degrees=True,
                         is_azimuth=is_azimuth,
                     )
+                    bad_pointing = ob.detdata[self.pixels][det, vslice] >= self._n_pix
+                    (ob.detdata[self.pixels][det, vslice])[bad_pointing] = -1
 
                     # Turn position relative to the center into row and column
                     world_in = np.column_stack([rel_lon, rel_lat])

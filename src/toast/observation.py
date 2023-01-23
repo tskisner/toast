@@ -963,7 +963,6 @@ class Observation(MutableMapping):
         self.intervals = new_intervals_manager
 
         # Restore detector flags for our new local detectors
-        self._detflags = {x: int(0) for x in self.dist.dets[self.dist.comm.group_rank]}
         self.set_local_detector_flags(
             {x: all_det_flags[x] for x in self.local_detectors}
         )

@@ -526,6 +526,8 @@ class FitNoiseModel(Operator):
         input_data[bad] = 1.0e-6 * good_min
         input_log_data = np.log(input_data)
 
+        # print(f"FIT: input {input_freqs} {input_data} {input_log_data}")
+
         raw_fmin = self.f_min.to_value(u.Hz)
 
         if self.white_noise_max is None:

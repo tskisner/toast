@@ -30,7 +30,6 @@ class AzimuthIntervals(Operator):
     that it only makes sense to use this operator for ground-based
     telescopes that primarily scan in azimuth rather than more complicated (e.g.
     lissajous) patterns.
-
     """
 
     # Class traits
