@@ -11,14 +11,14 @@ from astropy import units as u
 from astropy.table import Column, QTable, Table
 
 from .. import qarray as qa
+from ..dist import distribute_uniform
 from ..observation import default_values as defaults
 from ..timing import function_timer
 from ..traits import Bool, Int, Unicode, trait_docs, Quantity, Tuple
 from ..utils import Environment, Logger
 from .operator import Operator
 
-from .pointing_model_utils import find_source, make_cal_map
-
+from .pointing_model_utils import find_source, make_cal_map, fit_gaussian, evaluate_gaussian
 
 
 @trait_docs
@@ -125,6 +125,11 @@ class PointingModelFit(Operator):
     def _exec(self, data, detectors=None, use_accel=False, **kwargs):
         log = Logger.get()
 
+        # Do we have a specified source location?
+        have_source = False
+        if (self.source_lat is not None) and (self.source_lon is not None):
+            have_source = True
+
         # Set up mapmaking operators.
 
         if len(self.resolution) == 0:
@@ -145,8 +150,11 @@ class PointingModelFit(Operator):
 
         all_dets = OrderedDict()
         slv_dets = OrderedDict()
+        nominal_fwhm = dict()
         for ob in data.obs:
             fp = ob.telescope.focalplane
+            for d in ob.all_detectors:
+                nominal_fwhm[d] = fp[d]["fwhm"]
             n_rows = len(fp.detector_data)
             if self.relcal_column not in fp.detector_data.colnames:
                 fp.detector_data.add_column(
@@ -174,6 +182,10 @@ class PointingModelFit(Operator):
                     # We have at least one observation with a pointing solution
                     # for this detector
                     slv_dets[d] = True
+                else:
+                    # Record the nominal FWHM for solving
+                    if d not in nominal_fwhm:
+                        nominal_fwhm[d] = fp[d]["fwhm"]
 
         all_dets = list(all_dets.keys())
         solved_dets = list([x for x, y in slv_dets.items() if y])
@@ -184,10 +196,10 @@ class PointingModelFit(Operator):
         # Make a map combining all detectors with an existing pointing
         # solution.
 
-        wcs = None
-        img_data = None
+        wcs_solved = None
+        img_data_solved = None
         if len(solved_dets) > 0:
-            wcs, img_data = make_cal_map(
+            wcs_solved, img_data_solved = make_cal_map(
                 "already_solved",
                 data,
                 solved_dets,
@@ -204,52 +216,12 @@ class PointingModelFit(Operator):
                 debug_dir=self.debug_dir,
             )
 
-            # Find the source on one process
-            src_lon = None
-            src_lat = None
-            if data.comm.group_rank == 0:
-                src_debug = None
-                if self.debug_dir is not None:
-                    src_debug = os.path.join(self.debug_dir, "findpeaks_solved")
-                    import matplotlib.pyplot as plt
-                    fig = plt.figure(dpi=100, figsize=(8, 4))
-                    ax = fig.add_subplot(1, 1, 1)
-                    im = ax.imshow(
-                        img_data, 
-                        cmap="jet", 
-                    )
-                    fig.colorbar(im, orientation="vertical")
-                    outfile = f"{src_debug}_input.pdf"
-                    plt.savefig(
-                        outfile, 
-                        dpi=100, 
-                        bbox_inches="tight", 
-                        format="pdf"
-                    )
-                    plt.close()
-                (src_img_x, src_img_y) = find_source(
-                    img=img_data, 
-                    debug_root=src_debug
-                )
-                src_lon, src_lat = wcs.wcs_pix2world(
-                    np.array([[src_img_x, src_img_y]]),
-                    0,
-                )[0]
-                print(f"source at {src_img_x}, {src_img_y} = {src_lon}, {src_lat}")
-                # for i in range(-2, 3):
-                #     for j in range(-2, 3):
-                #         x = src_img_x + i
-                #         y = src_img_y + j
-                #         sn, st = wcs.wcs_pix2world(np.array([[x, y]]), 0)[0]
-                #         print(f"{x}, {y} = {sn}, {st}")
-            if data.comm.comm_group is not None:
-                src_lon = data.comm.comm_group.bcast(src_lon, root=0)
-                src_lat = data.comm.comm_group.bcast(src_lat, root=0)
-        
         # Make single detector maps of unsolved detectors.
 
+        wcs = dict()
+        img_data = dict()
         for det in unsolved_dets:
-            wcs, img_data = make_cal_map(
+            wcs[det], img_data[det] = make_cal_map(
                 det,
                 data,
                 [det,],
@@ -266,47 +238,135 @@ class PointingModelFit(Operator):
                 debug_dir=self.debug_dir,
             )
 
-            # Find the source on one process
-            src_lon = None
-            src_lat = None
-            if data.comm.group_rank == 0:
-                src_debug = None
-                if self.debug_dir is not None:
-                    src_debug = os.path.join(self.debug_dir, f"findpeaks_{det}")
-                    import matplotlib.pyplot as plt
-                    fig = plt.figure(dpi=100, figsize=(8, 4))
-                    ax = fig.add_subplot(1, 1, 1)
-                    im = ax.imshow(
-                        img_data, 
-                        cmap="jet", 
-                    )
-                    fig.colorbar(im, orientation="vertical")
-                    outfile = f"{src_debug}_input.pdf"
-                    plt.savefig(
-                        outfile, 
-                        dpi=100, 
-                        bbox_inches="tight", 
-                        format="pdf"
-                    )
-                    plt.close()
-                (src_img_x, src_img_y) = find_source(
-                    img=img_data, 
-                    debug_root=src_debug
+        # Distribute unsolved detectors among the group and fit the source
+        # location for each detector.
+
+        det_dist = distribute_uniform(len(unsolved_dets), data.comm.group_size)
+        det_range = det_dist[data.comm.group_rank]
+        det_off = det_range.offset
+
+        local_det_src = dict()
+
+        for idet in range(det_range.n_elem):
+            det = unsolved_dets[det_off + idet]
+            src_debug = None
+            if self.debug_dir is not None:
+                src_debug = os.path.join(self.debug_dir, f"pointing_model_{det}")
+                import matplotlib.pyplot as plt
+                fig = plt.figure(dpi=100, figsize=(8, 4))
+                ax = fig.add_subplot(1, 1, 1)
+                im = ax.imshow(
+                    img_data[det], 
+                    cmap="jet", 
                 )
-                src_lon, src_lat = wcs.wcs_pix2world(
-                    np.array([[src_img_x, src_img_y]]),
-                    0,
-                )[0]
-                print(f"{det} source at {src_img_x}, {src_img_y} = {src_lon}, {src_lat}")
-                # for i in range(-2, 3):
-                #     for j in range(-2, 3):
-                #         x = src_img_x + i
-                #         y = src_img_y + j
-                #         sn, st = wcs.wcs_pix2world(np.array([[x, y]]), 0)[0]
-                #         print(f"{x}, {y} = {sn}, {st}")
-            if data.comm.comm_group is not None:
-                src_lon = data.comm.comm_group.bcast(src_lon, root=0)
-                src_lat = data.comm.comm_group.bcast(src_lat, root=0)
+                fig.colorbar(im, orientation="vertical")
+                outfile = f"{src_debug}_input.pdf"
+                plt.savefig(
+                    outfile, 
+                    dpi=100, 
+                    bbox_inches="tight", 
+                    format="pdf"
+                )
+                plt.close()
+            (src_img_x, src_img_y) = find_source(
+                img=img_data[det], 
+                debug_root=src_debug
+            )
+            src_lon, src_lat = wcs[det].wcs_pix2world(
+                np.array([[src_img_x, src_img_y]]),
+                0,
+            )[0]
+            print(f"{det} find_source at {src_img_x}, {src_img_y} = {src_lon}, {src_lat}", flush=True)
+
+            # Get the lon / lat range of the image
+            lon_min_deg, lat_min_deg = wcs[det].wcs_pix2world(
+                np.array([[-0.5, -0.5]]),
+                0,
+            )[0]
+            lon_min = np.radians(lon_min_deg)
+            lat_min = np.radians(lat_min_deg)
+
+            lon_max_deg, lat_max_deg = wcs[det].wcs_pix2world(
+                np.array(
+                    [
+                        [
+                            img_data[det].shape[0] - 0.5 - 1.0e-6,
+                            img_data[det].shape[1] - 0.5 - 1.0e-6,
+                        ]
+                    ]
+                ),
+                0,
+            )[0]
+            lon_max = np.radians(lon_max_deg)
+            lat_max = np.radians(lat_max_deg)
+
+            # Fit this source to an elliptical gaussian
+            fit = fit_gaussian(
+                img_data[det], 
+                lon_min, 
+                lon_max, 
+                lat_min, 
+                lat_max,
+                np.radians(src_lon),
+                np.radians(src_lat),
+                nominal_fwhm[det].to_value(u.rad),
+            )
+            local_det_src[det] = {
+                "center_lon": np.degrees(fit["center_lon"]) * u.degree, 
+                "center_lat": np.degrees(fit["center_lat"]) * u.degree,
+                "sigma_major": np.degrees(fit["sigma_major"]) * u.degree,
+                "sigma_minor": np.degrees(fit["sigma_minor"]) * u.degree,
+                "angle": fit["angle"] * u.rad,
+                "amplitude": fit["amplitude"],
+            }
+
+            if self.debug_dir is not None:
+                best = evaluate_gaussian(
+                    img_data[det].shape[1],
+                    img_data[det].shape[0], 
+                    lon_min,
+                    lon_max,
+                    lat_min,
+                    lat_max,
+                    fit["center_lon"], 
+                    fit["center_lat"],
+                    fit["sigma_major"],
+                    fit["sigma_minor"],
+                    fit["angle"],
+                    fit["amplitude"],
+                )
+                import matplotlib.pyplot as plt
+                fig = plt.figure(dpi=100, figsize=(8, 4))
+                ax = fig.add_subplot(1, 1, 1)
+                im = ax.imshow(
+                    best, 
+                    cmap="jet", 
+                )
+                fig.colorbar(im, orientation="vertical")
+                outfile = f"{src_debug}_solved.pdf"
+                plt.savefig(
+                    outfile, 
+                    dpi=100, 
+                    bbox_inches="tight", 
+                    format="pdf"
+                )
+                plt.close()
+            print(f"{det} finished beam fit", flush=True)
+
+        # Gather results
+        det_src = None
+        if data.comm.comm_group is not None:
+            all_det_src = data.comm.comm_group.gather(local_det_src, root=0)
+            if data.comm.group_rank == 0:
+                det_src = dict()
+                for psrc in all_det_src:
+                    det_src.update(psrc)
+            det_src = data.comm.comm_group.bcast(det_src, root=0)
+        else:
+            det_src = local_det_src
+
+        if data.comm.group_rank == 0:
+            print(f"Beam properties = {det_src}")
 
         # If a known source position is given, attempt to find a source in
         # the map.  Otherwise attempt to fit against the map made from

@@ -57,19 +57,19 @@ def find_source(
         raise RuntimeError(msg)
 
     env = Environment.get()
-    verbosity = 3
+    verbosity = 2
     if env.log_level() == "DEBUG":
         verbosity = 2
     elif env.log_level() == "VERBOSE":
         verbosity = 3
 
-    # Set denoising window to 1% of shortest dimension
+    # Set denoising window to 10% of shortest dimension
     short = min(img.shape[0], img.shape[1])
-    window = int(0.01 * short)
-    if window < 5:
-        window = 5
+    window = int(0.1 * short)
+    if window < 10:
+        window = 10
 
-    interp = 5
+    interp = window
 
     print(f"window set to {window}")
     print(f"interp set to {interp}")
@@ -84,7 +84,7 @@ def find_source(
         verbose=verbosity,
     )
     result = fpk.fit(img)
-    print(result)
+    #print(result)
 
     import matplotlib.pyplot as plt
 
@@ -105,7 +105,7 @@ def find_source(
     plt.close()
 
     fig_ax = fpk.plot(cmap="jet")
-    print(fig_ax)
+    #print(fig_ax)
     outfile = f"{debug_root}_result.pdf"
     plt.savefig(
         outfile, 
@@ -145,8 +145,8 @@ def make_cal_map(
     """Make a simple, intensity-only map for use in calibration.
 
     This applies a 1D polynomial filter to a copy of the data and makes a
-    binned map.  Then it extracts this and returns it as a 2D image on the
-    root process of the group communicator.
+    binned map.  Then it extracts this and returns it as a 2D image along with
+    wcs information.
 
     Args:
 
@@ -238,64 +238,182 @@ def make_cal_map(
     # Extract the 2D image and the WCS that was used
     wcs = WCS(header=pixels_cal.wcs.to_header())
     img_data = None
-    if data.comm.group_rank == 0:
-        img_data = np.zeros(
-            (pixels_cal.wcs_shape[1], pixels_cal.wcs_shape[0]),
-            dtype=np.float64,
+    img_data = np.zeros(
+        (pixels_cal.wcs_shape[1], pixels_cal.wcs_shape[0]),
+        dtype=np.float64,
+    )
+    img_data[:, :] = np.transpose(
+        data[f"{mapper.name}_map"][:, :, 0].reshape(
+            pixels_cal.wcs_shape
         )
-        img_data[:, :] = np.transpose(
-            data[f"{mapper.name}_map"][:, :, 0].reshape(
-                pixels_cal.wcs_shape
-            )
-        )
+    )
+
+    # Clean up temporary data products
+    for prod in ["hits", "map", "cov", "invcov", "rcond"]:
+        prod_name = f"{mapper.name}_{prod}"
+        data[prod_name].clear()
+        del data[prod_name]
+
     return wcs, img_data
 
 
-# def evaluate_sym_gauss(img, center_x, center_y, sigma, amplitude):
-#     dim_x = img.shape[0]
-#     dim_y = img.shape[1]
-#     coeff = amplitude / (2.0 * np.pi * sigma**2)
-#     factor = 1.0 / (2.0 * sigma**2)
-#     for x in range(dim_x):
-#         for y in range(dim_y):
-#             xdelt = (x - center_x)**2
-#             ydelt = (y - center_y)**2
-#             xterm = xdelt * factor
-#             yterm = ydelt * factor
-#             img[x, y] = coeff * np.exp(-(xterm + yterm))
+# Functions to fit a 2D gaussian given the previously-determined
+# approximate peak location.
 
-# def evaluate_sym_gauss_jac():
-#     pass
+def evaluate_gaussian(
+    n_lon,
+    n_lat, 
+    min_lon, 
+    max_lon, 
+    min_lat, 
+    max_lat, 
+    center_lon, 
+    center_lat,
+    sigma_major,
+    sigma_minor,
+    angle,
+    amplitude,
+):
+    range_lon = max_lon - min_lon
+    range_lat = max_lat - min_lat
+    pix_incr_lon = range_lon / (n_lon - 1)
+    pix_incr_lat = range_lat / (n_lat - 1)
+    pix_lon = np.tile(
+        min_lon + pix_incr_lon * (0.5 + np.arange(n_lon)) - center_lon,
+        n_lat,
+    )
+    pix_lat = np.repeat(
+        min_lat + pix_incr_lat * (0.5 + np.arange(n_lat)) - center_lat,
+        n_lon,
+    )
 
-# def _fit_log_fun(self, x, *args, **kwargs):
+    # Compute coefficients
+    cossq = np.cos(angle)**2
+    sinsq = np.sin(angle)**2
+    sintwo = np.sin(2 * angle)
+    a = cossq / (2 * sigma_major**2) + sinsq / (2 * sigma_minor**2)
+    b = - sintwo / (4 * sigma_major**2) + sintwo / (4 * sigma_minor**2)
+    c = sinsq / (2 * sigma_major**2) + cossq / (2 * sigma_minor**2)
 
-# def _fit_log_jac(self, x, *args, **kwargs):
+    return amplitude * np.exp(
+        -(a * pix_lon**2 + 2 * b * pix_lon * pix_lat + c * pix_lat**2)
+    ).reshape(
+        (n_lon, n_lat)
+    )
 
-# def fit_sym_gauss():
-#     bounds = Bounds(
-#         lb=np.array([input_freqs[0], 0.1]),
-#         ub=np.array([input_freqs[-1], 10.0]),
-#     )
-#     x_0 = guess
-#     if x_0 is None:
-#         x_0 = np.array([midfreq, 1.0])
+def fit_gaussian_func(x, *args, **kwargs):
+    center_lon = x[0]
+    center_lat = x[1]
+    sigma_major = x[2]
+    sigma_minor = x[3]
+    angle = x[4]
+    amp = x[5]
+    n_lon = kwargs["n_lon"]
+    n_lat = kwargs["n_lat"]
+    min_lon = kwargs["min_lon"]
+    max_lon = kwargs["max_lon"]
+    min_lat = kwargs["min_lat"]
+    max_lat = kwargs["max_lat"]
+    data = kwargs["data"]
 
-#     # print(f"FIT:  starting guess = {x_0}")
+    current = evaluate_gaussian(
+        n_lon,
+        n_lat, 
+        min_lon, 
+        max_lon, 
+        min_lat, 
+        max_lat, 
+        center_lon, 
+        center_lat,
+        sigma_major,
+        sigma_minor,
+        angle,
+        amp,
+    )
+    return (current - data).reshape((-1))
 
-#     result = least_squares(
-#         evaluate_sym_gauss,
-#         x_0,
-#         jac=evaluate_sym_gauss_jac,
-#         bounds=bounds,
-#         xtol=1.0e-10,
-#         gtol=1.0e-10,
-#         ftol=1.0e-10,
-#         max_nfev=500,
-#         verbose=0,
-#         kwargs={
-#             "freqs": input_freqs,
-#             "logdata": input_log_data,
-#             "fmin": raw_fmin,
-#             "net": net,
-#         },
-#     )
+
+def fit_gaussian(
+    data, 
+    min_lon, 
+    max_lon, 
+    min_lat, 
+    max_lat,
+    peak_lon,
+    peak_lat,
+    nominal_fwhm,
+):
+    n_lon = data.shape[0]
+    n_lat = data.shape[1]
+    bounds = (
+        np.array(
+            [
+                peak_lon - 5 * nominal_fwhm, 
+                peak_lat - 5 * nominal_fwhm,
+                0.2 * nominal_fwhm,
+                0.2 * nominal_fwhm,
+                - np.pi,
+                np.mean(data),
+            ]
+        ),
+        np.array(
+            [
+                peak_lon + 5 * nominal_fwhm,
+                peak_lat + 5 * nominal_fwhm,
+                5.0 * nominal_fwhm,
+                5.0 * nominal_fwhm,
+                np.pi,
+                2.0 * np.amax(data)
+            ]
+        ),
+    )
+    x_0 = np.array(
+        [
+            peak_lon,
+            peak_lat,
+            nominal_fwhm,
+            nominal_fwhm,
+            0.0,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    result = least_squares(
+        fit_gaussian_func,
+        x_0,
+        jac="2-point",
+        bounds=bounds,
+        xtol=1.0e-10,
+        gtol=1.0e-10,
+        ftol=1.0e-10,
+        max_nfev=500,
+        method="trf",
+        verbose=0,
+        kwargs={
+            "n_lon": n_lon,
+            "n_lat": n_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "data": data,
+        },
+    )
+    ret = dict()
+    ret["fit_result"] = result
+    if result.success:
+        ret["center_lon"] = result.x[0]
+        ret["center_lat"] = result.x[1]
+        ret["sigma_major"] = result.x[2]
+        ret["sigma_minor"] = result.x[3]
+        ret["angle"] = result.x[4]
+        ret["amplitude"] = result.x[5]
+    else:
+        ret["center_lon"] = peak_lon
+        ret["center_lat"] = peak_lat
+        ret["sigma_major"] = nominal_fwhm
+        ret["sigma_minor"] = nominal_fwhm
+        ret["angle"] = 0.0
+        ret["amplitude"] = np.amax(data)
+    return ret

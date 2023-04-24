@@ -150,8 +150,8 @@ class PointingModelFitTest(MPITestCase):
 
         print(f"Simulating noise", flush=True)
         # Simulate noise and accumulate to signal
-        sim_noise = ops.SimNoise(noise_model=el_model.out_model)
-        sim_noise.apply(data)
+        # sim_noise = ops.SimNoise(noise_model=el_model.out_model)
+        # sim_noise.apply(data)
 
         # print(f"Simulating atmosphere", flush=True)
         # # Simulate atmosphere signal and accumulate
@@ -219,6 +219,107 @@ class PointingModelFitTest(MPITestCase):
         #             plt.savefig(outfile)
         #             plt.close()
         return data, (source_lon, source_lat)
+    
+    def test_gauss_fit(self):
+        rank = 0
+        if self.comm is not None:
+            rank = self.comm.rank
+
+        # Create an input gaussian
+        nx = 1000
+        ny = 1000
+        lon_min = - np.pi / 8
+        lon_max = np.pi / 8
+        lat_min = - np.pi / 8
+        lat_max = np.pi / 8
+        lon_range = lon_max - lon_min
+        lat_range = lat_max - lat_min
+        sigma_major = 0.05 * lon_range
+        sigma_minor = 0.02 * lat_range
+        center_lon = 0.5 * (lon_min + lon_max) + 3 * sigma_major
+        center_lat = 0.5 * (lat_min + lat_max) + 3 * sigma_minor
+        rot = np.pi / 8
+        img = ops.pointing_model_utils.evaluate_gaussian(
+            nx,
+            ny,
+            lon_min, 
+            lon_max, 
+            lat_min, 
+            lat_max, 
+            center_lon, 
+            center_lat,
+            sigma_major,
+            sigma_minor,
+            rot,
+            1.0,
+        )
+        if rank == 0:
+            import matplotlib.pyplot as plt
+            fig = plt.figure(dpi=100, figsize=(6, 4))
+            ax = fig.add_subplot(1, 1, 1)
+            im = ax.imshow(
+                img, 
+                cmap="jet",
+                origin="lower", 
+            )
+            fig.colorbar(im, orientation="vertical")
+            outfile = os.path.join(self.outdir, f"gauss_fit_input.pdf")
+            plt.savefig(
+                outfile, 
+                dpi=100, 
+                bbox_inches="tight", 
+                format="pdf"
+            )
+            plt.close()
+        
+        # Fit for it
+        fit = ops.pointing_model_utils.fit_gaussian(
+            img, 
+            lon_min, 
+            lon_max, 
+            lat_min, 
+            lat_max,
+            center_lon,
+            center_lat,
+            0.5 * (sigma_major + sigma_minor),
+        )
+        print(fit)
+
+        if rank == 0:
+            import matplotlib.pyplot as plt
+
+            best = ops.pointing_model_utils.evaluate_gaussian(
+                nx,
+                ny, 
+                lon_min, 
+                lon_max, 
+                lat_min, 
+                lat_max, 
+                fit["center_lon"], 
+                fit["center_lat"],
+                fit["sigma_major"],
+                fit["sigma_minor"],
+                fit["angle"],
+                fit["amplitude"],
+            )
+
+            fig = plt.figure(dpi=100, figsize=(6, 4))
+            ax = fig.add_subplot(1, 1, 1)
+            im = ax.imshow(
+                best, 
+                cmap="jet",
+                origin="lower", 
+            )
+            fig.colorbar(im, orientation="vertical")
+            outfile = os.path.join(self.outdir, f"gauss_fit_result.pdf")
+            plt.savefig(
+                outfile, 
+                dpi=100, 
+                bbox_inches="tight", 
+                format="pdf"
+            )
+            plt.close()
+        
 
     def test_source_fit(self):
         if not available_atm:
@@ -239,11 +340,13 @@ class PointingModelFitTest(MPITestCase):
             source_lon=source_lon * u.degree,
             source_lat=source_lat * u.degree,
             noise_model="el_weighted",
-            resolution=(0.01 * u.degree, 0.01 * u.degree),
+            resolution=(0.05 * u.degree, 0.05 * u.degree),
             debug_dir=os.path.join(self.outdir, "pointing_model"),
             state_default_good=False,
         )
         fitter.apply(data)
+
+        print(data)
 
 
         close_data(data)
