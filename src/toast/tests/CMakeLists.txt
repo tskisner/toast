@@ -48,6 +48,7 @@ install(FILES
     template_periodic.py
     template_amplitudes.py
     template_offset.py
+    template_offset2d.py
     template_fourier2d.py
     template_subharmonic.py
     template_gain.py
