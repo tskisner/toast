@@ -38,6 +38,7 @@ install(FILES
     ops_mapmaker.py
     covariance.py
     ops_pointing_healpix.py
+    ops_pointing_model.py
     ops_pointing_wcs.py
     ops_memory_counter.py
     ops_scan_map.py

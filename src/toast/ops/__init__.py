@@ -42,6 +42,7 @@ from .pixels_healpix import PixelsHealpix
 from .pixels_wcs import PixelsWCS
 from .pointing import BuildPixelDistribution
 from .pointing_detector import PointingDetectorSimple
+from .pointing_model import PointingModelFit
 from .polyfilter import CommonModeFilter, PolyFilter, PolyFilter2D
 from .reset import Reset
 from .run_spt3g import RunSpt3g
