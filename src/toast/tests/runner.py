@@ -23,6 +23,7 @@ from . import instrument as test_instrument
 from . import intervals as test_intervals
 from . import ops_flag_intervals as test_ops_flag_intervals
 from . import io_hdf5 as test_io_hdf5
+from . import jax_cpu as test_jax_cpu
 from . import math_misc as test_math_misc
 from . import noise as test_noise
 from . import observation as test_observation
@@ -266,6 +267,7 @@ def test(name=None, verbosity=2):
         suite.addTest(loader.loadTestsFromModule(test_io_hdf5))
 
         suite.addTest(loader.loadTestsFromModule(test_accelerator))
+        suite.addTest(loader.loadTestsFromModule(test_jax_cpu))
 
         #
         # suite.addTest(loader.loadTestsFromModule(testopssimsss))
