@@ -5,6 +5,8 @@
 import os
 import time
 
+from functools import partial
+
 use_jax = False
 try:
     import jax
@@ -15,7 +17,6 @@ except:
     pass
 
 import numpy as np
-import numpy.testing as nt
 
 from .._libtoast import (
     cov_accum_diag,
@@ -41,20 +42,20 @@ def jax_polyfilter(order, flags, signals, starts, stops):
     xstart = 0.5 * dx - 1
     orderinv = 1.0 / n_order
 
-    @jax.jit
+    @partial(jax.jit, static_argnames=["ordr", "ns"])
     def build_templates(ordr, ns, flgs):
         templ = jnp.zeros((ordr, ns))
         for iord in range(ordr):
             if iord == 0:
                 templ = jlax.dynamic_update_slice(
                     templ,
-                    jnp.ones(ns),
+                    jnp.ones(ns).reshape((1, ns)),
                     (0, 0),
                 )
             elif iord == 1:
                 templ = jlax.dynamic_update_slice(
                     templ,
-                    xstart + dx * jnp.arange(ns),
+                    (xstart + dx * jnp.arange(ns)).reshape((1, ns)),
                     (1, 0),
                 )
             else:
@@ -62,25 +63,25 @@ def jax_polyfilter(order, flags, signals, starts, stops):
                 row = orderinv * (
                     templ[iord - 1] * x * (2 * iord - 1) -
                     templ[iord - 2] * (iord - 1)
-                )
+                ).reshape((1, ns))
                 templ = jlax.dynamic_update_slice(
                     templ,
                     row,
                     (iord, 0),
                 )
         # Apply flags
-        templ = templ.at[:, flgs != 0].set(0)
+        templ = templ.at[:, jnp.argwhere(flgs != 0, size=n_samp)].set(0)
         return templ
-
 
     templates = build_templates(n_order, n_samp, flags)
 
     # Build flagged signal array
     sigarray = jnp.vstack(signals)
-    sigarray = sigarray.at[:, flags != 0].set(0)
+    sigarray = sigarray.at[:, jnp.argwhere(flags != 0, size=n_samp)].set(0)
 
     # Solve for filtered timestreams
-    filtered = jax.scipy.linalg.solve(templates, sigarray.T).to_py()
+    filtered = jax.scipy.linalg.solve(templates, sigarray).to_py()
+    #filtered = sigarray
 
     # Update inputs
     for isig, sig in enumerate(signals):
@@ -104,7 +105,7 @@ class JaxCpuTest(MPITestCase):
             return
         print(jax.devices())
         order = 9
-        nsamp = 5000000
+        nsamp = 10000000
         nsig = 5
         nintr = 10
         starts = list()
@@ -126,17 +127,21 @@ class JaxCpuTest(MPITestCase):
         flags = np.zeros(nsamp, dtype=np.uint8)
         sigs_compiled = list()
         sigs_jax = list()
+        sigs_jax2 = list()
         for isig in range(nsig):
             sdata = np.random.normal(loc=isig, scale=isig, size=nsamp)
             sigs_compiled.append(sdata)
             sigs_jax.append(np.array(sdata))
+            sigs_jax2.append(np.array(sdata))
 
         tm = Timer()
         tm.start()
         filter_polynomial(order, flags, sigs_compiled, starts, stops, False)
         tm.report_clear("filter_polynomial: libtoast")
         jax_polyfilter(order, flags, sigs_jax, starts, stops)
-        tm.report_clear("filter_polynomial: jax")
+        tm.report_clear("filter_polynomial: jax compile + exec")
+        jax_polyfilter(order, flags, sigs_jax2, starts, stops)
+        tm.report_clear("filter_polynomial: jax exec")
         tm.stop()
 
 
