@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2020 by the parties listed in the AUTHORS file.
+# Copyright (c) 2015-2025 by the parties listed in the AUTHORS file.
 # All rights reserved.  Use of this source code is governed by
 # a BSD-style license that can be found in the LICENSE file.
 
@@ -30,13 +30,13 @@ class Pipeline(Operator):
     operators = List([], help="List of Operator instances to run.")
 
     detector_sets = List(
-        ["ALL"],
-        help="List of detector sets.  ['ALL'] and ['SINGLE'] are also valid values.",
+        ["OBS"],
+        help="List of detector sets.  ['ALL'], ['OBS'] and ['SINGLE'] are also valid.",
     )
 
     use_hybrid = Bool(
         True,
-        help="Should the pipeline be allowed to use the GPU when it has some cpu-only operators.",
+        help="Should the pipeline use the GPU when it has some CPU-only operators.",
     )
 
     @traitlets.validate("detector_sets")
@@ -44,10 +44,10 @@ class Pipeline(Operator):
         detsets = proposal["value"]
         if len(detsets) == 0:
             msg = "detector_sets must be a list with at least one entry "
-            msg += "('ALL' and 'SINGLE' are valid entries)"
+            msg += "('ALL', 'OBS', and 'SINGLE' are valid entries)"
             raise traitlets.TraitError(msg)
         for dset in detsets:
-            if (dset != "ALL") and (dset != "SINGLE"):
+            if (dset != "OBS") and (dset != "ALL") and (dset != "SINGLE"):
                 # Not a built-in name, must be an actual list of detectors
                 if isinstance(dset, str) or len(dset) == 0:
                     raise traitlets.TraitError(
@@ -74,8 +74,8 @@ class Pipeline(Operator):
         super().__init__(**kwargs)
         # keeps track of the data that is on device
         self._staged_data = None
-        # keep track of the data that had to move back to host due to a cpu-only operator
-        # (for display / debugging purposes)
+        # keeps track of the data that had to move back to host due to a cpu-only
+        # operator (for display / debugging purposes)
         self._unstaged_data = None
 
     @function_timer
