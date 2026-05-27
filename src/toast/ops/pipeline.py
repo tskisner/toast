@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2025 by the parties listed in the AUTHORS file.
+# Copyright (c) 2015-2026 by the parties listed in the AUTHORS file.
 # All rights reserved.  Use of this source code is governed by
 # a BSD-style license that can be found in the LICENSE file.
 
@@ -148,6 +148,18 @@ class Pipeline(Operator):
                     detectors=None,
                     pipe_accel=pipe_accel,
                 )
+        elif len(self.detector_sets) == 1 and self.detector_sets[0] == "OBS":
+            # Run the operators one observation at a time
+            for iobs, obs in enumerate(data.obs):
+                temp_data = data.select(obs_index=iobs)
+                for op in self.operators:
+                    self._exec_operator(
+                        op,
+                        temp_data,
+                        detectors=None,
+                        pipe_accel=pipe_accel,
+                    )
+                del temp_data
         elif len(self.detector_sets) == 1 and self.detector_sets[0] == "SINGLE":
             # Get superset of detectors across all observations
             all_local_dets = data.all_local_detectors(
@@ -215,7 +227,10 @@ class Pipeline(Operator):
         msg = f"Proc ({data.comm.world_rank}, {data.comm.group_rank}) {self} "
         msg += f"calling operator '{op.name}' exec(accelerator={run_accel})"
         if detectors is None:
-            msg += " with ALL dets"
+            if data.is_view:
+                msg += f" with all dets for OBS {data.obs[0].name}"
+            else:
+                msg += " with ALL dets"
         log.verbose(msg)
 
         # Ensures data is where it should be for this operator

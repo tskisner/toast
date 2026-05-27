@@ -35,6 +35,10 @@ class Data(MutableMapping):
         """
         self._internal = dict()
 
+    @property
+    def is_view(self):
+        return self._view
+
     def __getitem__(self, key):
         return self._internal[key]
 
